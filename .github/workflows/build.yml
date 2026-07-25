@@ -1,0 +1,45 @@
+name: Build SevenMac
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: swift --version
+
+      - name: Make icon
+        run: |
+          chmod +x scripts/*.sh
+          ./scripts/make_icon.sh || true
+
+      - name: Build app bundle
+        run: ./scripts/build_app.sh
+
+      - name: Make DMG
+        run: ./scripts/make_dmg.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SevenMac-app
+          path: build/SevenMac.dmg
+
+      
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/SevenMac.dmg
+          generate_release_notes: true
