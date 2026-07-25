@@ -6,6 +6,15 @@ It is modelled on the Windows 7-Zip File Manager / NanaZip workflow - browse, op
 archives like folders, add, extract, test, checksum, benchmark - instead of the
 "drop a file and hope" model most Mac archivers use.
 
+<p align="center">
+  <img src="docs/screenshots/main.png" width="100%" alt="SevenMac main window" />
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/add.png" width="49.5%" alt="Add to Archive sheet" />
+  <img src="docs/screenshots/engine.png" width="49.5%" alt="Engine settings" />
+</p>
+
 ## Why this exists
 
 7-Zip ships **console-only** binaries for macOS. The existing Mac options are
