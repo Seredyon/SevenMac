@@ -11,8 +11,11 @@ struct ContentView: View {
     @State private var sortOrder: [KeyPathComparator<Item>] = [KeyPathComparator(\Item.name)]
     @State private var sheet: ActiveSheet?
     @State private var dropTargeted = false
+    @State private var editingArchive = false
+    @State private var confirmDelete = false
 
     enum ActiveSheet: Identifiable {
+        case editor(URL, String, String)
         case welcome
         case add([URL])
         case extractTo([String])
@@ -23,6 +26,7 @@ struct ContentView: View {
 
         var id: String {
             switch self {
+            case .editor: return "editor"
             case .welcome: return "welcome"
             case .add: return "add"
             case .extractTo: return "extract"
@@ -64,6 +68,7 @@ struct ContentView: View {
                         canGoBack: browser.canGoBack,
                         canGoForward: browser.canGoForward)
                 Divider()
+                workspaceHeader
                 fileTable
                 Divider()
                 StatusBar(itemCount: rows.count,
@@ -73,10 +78,13 @@ struct ContentView: View {
                           errorMessage: browser.errorMessage)
             }
             .toolbar { toolbarContent }
-            .searchable(text: $browser.searchText, placement: .toolbar, prompt: "Filter")
+            .searchable(text: $browser.searchText, placement: .toolbar, prompt: browser.location.isArchive ? "Search archive" : "Filter files")
         }
+        .disabled(editingArchive || job.isRunning)
         .sheet(item: $sheet) { active in
             switch active {
+            case let .editor(archive, path, password):
+                ArchiveEditorSheet(archive: archive, path: path, password: password) { browser.reload() }
             case .welcome:
                 WelcomeSheet { settings.didShowWelcome = true }
                     .interactiveDismissDisabled()
@@ -128,6 +136,14 @@ struct ContentView: View {
                          message: Text(payload.message),
                          dismissButton: .default(Text("OK")))
         }
+        .confirmationDialog("Delete selected items?", isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button(browser.location.isArchive ? "Remove from Archive" : "Move to Trash", role: .destructive) { deleteSelection() }
+        } message: {
+            Text(browser.location.isArchive ? "The archive will be tested before saving. A backup of the original will be kept. Changes to signed packages invalidate their signature." : "Selected files will be moved to the Trash.")
+        }
+        .onChange(of: browser.location) { _ in selection.removeAll() }
+        .onChange(of: browser.searchText) { _ in selection.removeAll() }
+        .onAppAction(.edit) { editSelection() }
         .onAppear {
             if !settings.didShowWelcome { sheet = .welcome }
         }
@@ -199,11 +215,22 @@ struct ContentView: View {
         .contextMenu(forSelectionType: Item.ID.self) { ids in
             contextMenu(for: ids)
         } primaryAction: { ids in
-            if let id = ids.first, let item = browser.items.first(where: { $0.id == id }) {
-                browser.activate(item)
+            if let id = ids.first, let item = rows.first(where: { $0.id == id }) {
+                if browser.location.isArchive && !item.isDirectory { selection = ids; editSelection() }
+                else { browser.activate(item) }
             }
         }
+        .disabled(editingArchive || job.isRunning)
         .overlay {
+            if rows.isEmpty && !browser.isLoading {
+                VStack(spacing: 10) {
+                    Image(systemName: browser.errorMessage == nil ? "tray" : "exclamationmark.triangle")
+                        .font(.system(size: 34)).foregroundStyle(.secondary)
+                    Text(browser.errorMessage == nil ? (browser.searchText.isEmpty ? "This folder is empty" : "No matching files") : "Unable to open this location")
+                        .font(.headline)
+                    if let error = browser.errorMessage { Text(error).font(.callout).foregroundStyle(.secondary).frame(maxWidth: 450).multilineTextAlignment(.center) }
+                }.allowsHitTesting(false)
+            }
             if dropTargeted {
                 RoundedRectangle(cornerRadius: 12)
                     .strokeBorder(Color.accentColor, lineWidth: 3)
@@ -218,11 +245,20 @@ struct ContentView: View {
 
     @ViewBuilder
     private func contextMenu(for ids: Set<Item.ID>) -> some View {
+        if !browser.location.isArchive, ids.count == 1, let path = ids.first, isFile(URL(fileURLWithPath: path)) {
+            Button { browser.open(URL(fileURLWithPath: path), asArchive: true) } label: {
+                Label("Open as Archive", systemImage: "doc.zipper")
+            }
+            Divider()
+        }
         // Extract only makes sense inside an archive or for selected archive files.
         if extractableSelection(ids) {
             Button { syncSelection(ids); extractHere() } label: { Label("Extract Here", systemImage: "arrow.down.doc") }
             Button { syncSelection(ids); sheet = .extractTo(selectedArchivePaths()) } label: { Label("Extract To\u{2026}", systemImage: "tray.and.arrow.down") }
             Divider()
+        }
+        if browser.location.isArchive && ids.count == 1 {
+            Button { syncSelection(ids); editSelection() } label: { Label("View / Edit File…", systemImage: "square.and.pencil") }
         }
         Button { syncSelection(ids); beginAdd() } label: { Label("Add to Archive\u{2026}", systemImage: "plus.rectangle.on.folder") }
         if checksumableSelection(ids) {
@@ -230,7 +266,8 @@ struct ContentView: View {
         }
         Divider()
         Button { syncSelection(ids); revealInFinder() } label: { Label("Reveal in Finder", systemImage: "magnifyingglass") }
-        Button(role: .destructive) { syncSelection(ids); deleteSelection() } label: { Label("Delete", systemImage: "trash") }
+        Button(role: .destructive) { syncSelection(ids); confirmDelete = true } label: { Label("Delete", systemImage: "trash") }
+            .disabled(ids.isEmpty || (browser.location.isArchive && !canModifyArchive))
     }
 
     /// Right-clicking a row that is not part of the current selection should
@@ -251,6 +288,7 @@ struct ContentView: View {
             Button { beginAdd() } label: {
                 Label("Add", systemImage: "plus.rectangle.on.folder").labelStyle(.titleAndIcon)
             }
+            .disabled(browser.location.isArchive)
             .help("Create an archive from the selection (\u{21E7}\u{2318}A)")
 
             Button { extractHere() } label: {
@@ -289,11 +327,53 @@ struct ContentView: View {
         }
     }
 
+    private var canModifyArchive: Bool {
+        guard let archive = browser.currentArchiveURL, let summary = browser.summary else { return false }
+        return ArchiveService.canModify(archive, type: summary.type)
+    }
+
+    private var workspaceHeader: some View {
+        HStack(spacing: 14) {
+            Image(systemName: browser.location.isArchive ? "shippingbox.fill" : "folder.fill")
+                .font(.system(size: 26)).foregroundStyle(Color.accentColor)
+                .frame(width: 48, height: 48).background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
+            VStack(alignment: .leading, spacing: 4) {
+                Text(browser.location.title).font(.title3.weight(.semibold)).lineLimit(1)
+                if browser.location.isArchive {
+                    Text(canModifyArchive ? "Browse, edit and save in place" : "Browse and extract · read-only format")
+                        .font(.callout).foregroundStyle(.secondary)
+                } else {
+                    Text("Open an archive or select files to compress").font(.callout).foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            if browser.location.isArchive {
+                Toggle("Search all folders", isOn: $browser.searchAllEntries).toggleStyle(.checkbox).font(.caption)
+                Button { editSelection() } label: { Label("View / Edit", systemImage: "square.and.pencil") }
+                    .disabled(selection.count != 1 || browser.isLoading || editingArchive)
+                    .help("View or edit a selected file (⌘J)")
+                if browser.summary?.isEncrypted == true {
+                    Button { sheet = .password } label: { Image(systemName: "lock.open") }.help("Unlock encrypted file contents")
+                }
+            }
+            if editingArchive { ProgressView().controlSize(.small) }
+        }.padding(.horizontal, 18).padding(.vertical, 14)
+            .background(Color(nsColor: .controlBackgroundColor))
+    }
+
+    private func editSelection() {
+        guard !job.isRunning, !editingArchive, selection.count == 1,
+              let archive = browser.currentArchiveURL, let path = selection.first,
+              let item = rows.first(where: { $0.path == path }), !item.isDirectory else { return }
+        sheet = .editor(archive, path, browser.archivePassword)
+    }
+
     // MARK: - Derived state
 
     private var canExtract: Bool {
         if browser.location.isArchive { return true }
-        return selectedURLs().contains { ArchiveService.isArchive($0) && isFile($0) }
+        let urls = selectedURLs()
+        return urls.count == 1 && urls.allSatisfy { ArchiveService.isArchive($0) && isFile($0) }
     }
 
     /// Checksums are offered for the archive being browsed or for selected
@@ -311,7 +391,7 @@ struct ContentView: View {
 
     private func extractableSelection(_ ids: Set<Item.ID>) -> Bool {
         if browser.location.isArchive { return true }
-        return ids.contains { id in
+        return ids.count == 1 && ids.allSatisfy { id in
             let url = URL(fileURLWithPath: id)
             return ArchiveService.isArchive(url) && isFile(url)
         }
@@ -350,6 +430,7 @@ struct ContentView: View {
     // MARK: - Actions
 
     private func openPanel() {
+        guard !job.isRunning, !editingArchive else { return }
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = true
@@ -361,6 +442,7 @@ struct ContentView: View {
     }
 
     private func beginAdd() {
+        guard !job.isRunning, !editingArchive else { return }
         var inputs = selectedURLs()
         if inputs.isEmpty, let folder = browser.currentFolderURL {
             inputs = [folder]
@@ -395,6 +477,7 @@ struct ContentView: View {
     }
 
     private func extractHere() {
+        guard !job.isRunning, !editingArchive else { return }
         guard canExtract else { return }
         if browser.location.isArchive, let archive = browser.currentArchiveURL {
             let options = ExtractOptions(
@@ -447,6 +530,7 @@ struct ContentView: View {
     }
 
     private func testArchive() {
+        guard !job.isRunning, !editingArchive else { return }
         let archive: URL?
         if browser.location.isArchive {
             archive = browser.currentArchiveURL
@@ -472,6 +556,7 @@ struct ContentView: View {
     }
 
     private func computeHash() {
+        guard !job.isRunning, !editingArchive else { return }
         guard canChecksum else { return }
         var targets = selectedURLs().filter { isFile($0) }
         if targets.isEmpty, let archive = browser.currentArchiveURL { targets = [archive] }
@@ -488,16 +573,26 @@ struct ContentView: View {
         if browser.location.isArchive, let archive = browser.currentArchiveURL {
             let paths = selectedArchivePaths()
             guard !paths.isEmpty else { return }
-            job.run(title: "Removing from \(archive.lastPathComponent)",
-                    arguments: ArchiveService.deleteArguments(archive: archive, paths: paths),
-                    password: browser.archivePassword,
-                    successMessage: "Removed \(paths.count) item(s)") { _ in
-                selection.removeAll()
-                browser.reload()
+            guard canModifyArchive, !editingArchive, !job.isRunning else { return }
+            editingArchive = true
+            let password = browser.archivePassword
+            DispatchQueue.global(qos: .userInitiated).async {
+                let result = Result { try ArchiveEditor.remove(archive: archive, paths: paths, password: password) }
+                DispatchQueue.main.async {
+                    editingArchive = false
+                    switch result {
+                    case let .success(backup):
+                        job.alert = .init(title: "Removed and verified", message: "Backup: " + backup.lastPathComponent, isError: false)
+                        selection.removeAll(); browser.reload()
+                    case let .failure(error):
+                        job.alert = .init(title: "Could not remove files", message: error.localizedDescription, isError: true)
+                    }
+                }
             }
         } else {
             for url in selectedURLs() {
-                try? FileManager.default.trashItem(at: url, resultingItemURL: nil)
+                do { try FileManager.default.trashItem(at: url, resultingItemURL: nil) }
+                catch { job.alert = .init(title: "Could not move to Trash", message: error.localizedDescription, isError: true) }
             }
             selection.removeAll()
             browser.reload()
@@ -515,6 +610,7 @@ struct ContentView: View {
 
     private func handleDrop(_ providers: [NSItemProvider]) {
         var urls: [URL] = []
+        let lock = NSLock()
         let group = DispatchGroup()
         for provider in providers {
             group.enter()
@@ -523,7 +619,7 @@ struct ContentView: View {
                 guard let data,
                       let path = String(data: data, encoding: .utf8),
                       let url = URL(string: path) else { return }
-                urls.append(url)
+                lock.lock(); urls.append(url); lock.unlock()
             }
         }
         group.notify(queue: .main) {
@@ -540,6 +636,7 @@ struct ContentView: View {
 // MARK: - Sidebar
 
 struct SidebarView: View {
+    @EnvironmentObject var browser: BrowserModel
     var onSelect: (URL) -> Void
 
     private struct Place: Identifiable {
@@ -563,6 +660,12 @@ struct SidebarView: View {
 
     var body: some View {
         List {
+            Section {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("SevenMac").font(.title2.weight(.bold))
+                    Text("Your archives, opened up.").font(.caption).foregroundStyle(.secondary)
+                }.padding(.vertical, 12)
+            }
             Section("Places") {
                 ForEach(places) { place in
                     Button {
@@ -576,6 +679,20 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
+        .safeAreaInset(edge: .bottom) {
+            VStack(alignment: .leading, spacing: 8) {
+                if !browser.recentArchives.isEmpty {
+                    Text("RECENT ARCHIVES").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                    ForEach(browser.recentArchives, id: \.path) { url in
+                        Button { onSelect(url) } label: {
+                            Label(url.lastPathComponent, systemImage: "doc.zipper").lineLimit(1).truncationMode(.middle)
+                        }.buttonStyle(.plain).help(url.path)
+                    }
+                }
+                Divider()
+                Text("7-Zip engine · Apple Silicon").font(.caption2).foregroundStyle(.secondary)
+            }.padding(16)
+        }
     }
 }
 

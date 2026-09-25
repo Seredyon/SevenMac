@@ -52,7 +52,7 @@ enum Formatting {
     }()
 
     static func size(_ value: Int64) -> String {
-        value <= 0 ? "\u{2014}" : byteFormatter.string(fromByteCount: value)
+        value < 0 ? "\u{2014}" : byteFormatter.string(fromByteCount: value)
     }
 
     static let dateFormatter: DateFormatter = {

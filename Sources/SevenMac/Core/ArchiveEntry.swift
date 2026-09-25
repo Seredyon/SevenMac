@@ -37,15 +37,16 @@ struct ArchiveSummary {
 
 /// Parses the output of `7zz l -slt`.
 enum ArchiveListParser {
-    static let dateFormatter: DateFormatter = {
+    static var dateFormatter: DateFormatter {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd HH:mm:ss"
         f.locale = Locale(identifier: "en_US_POSIX")
         f.timeZone = .current
         return f
-    }()
+    }
 
     static func parse(_ output: String) -> (entries: [ArchiveEntry], summary: ArchiveSummary) {
+        let dateFormatter = Self.dateFormatter
         var entries: [ArchiveEntry] = []
         var summary = ArchiveSummary()
 
@@ -62,7 +63,7 @@ enum ArchiveListParser {
         }
 
         for rawLine in output.components(separatedBy: .newlines) {
-            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            let line = rawLine
 
             if line.hasPrefix("----------") {
                 reachedEntries = true
@@ -90,7 +91,7 @@ enum ArchiveListParser {
 
             hasCurrent = true
             switch key {
-            case "Path": current.path = value.replacingOccurrences(of: "\\", with: "/")
+            case "Path": current.path = value
             case "Size": current.size = Int64(value) ?? 0
             case "Packed Size": current.packedSize = Int64(value) ?? 0
             case "Modified": current.modified = dateFormatter.date(from: String(value.prefix(19)))

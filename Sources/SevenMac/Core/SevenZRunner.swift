@@ -49,13 +49,16 @@ final class SevenZRunner {
             throw SevenZError.binaryMissing
         }
 
+        var flags: [String] = []
         var args = arguments
-        args.append("-y")            // assume yes on queries
-        args.append("-bse1")         // stderr -> stdout, single stream
-        if wantsProgress { args.append("-bsp1") }
+        flags.append("-y")            // assume yes on queries
+        flags.append("-bse1")         // stderr -> stdout, single stream
+        if wantsProgress { flags.append("-bsp1") }
         if let password, !password.isEmpty {
-            args.append("-p" + password)
+            flags.append("-p" + password)
         }
+
+        args.insert(contentsOf: flags, at: min(1, args.count))
 
         let process = Process()
         process.executableURL = binary
@@ -86,7 +89,10 @@ final class SevenZRunner {
             process.standardError = pipe
         }
 
-        try process.run()
+        do { try process.run() } catch {
+            if masterFD >= 0 { close(masterFD); close(slaveFD) }
+            throw error
+        }
         onProcess?(process)
         // Close stdin immediately so 7zz never blocks on an interactive prompt.
         inPipe.fileHandleForWriting.closeFile()

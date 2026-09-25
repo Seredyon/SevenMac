@@ -15,9 +15,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.2</string>
+	<string>1.3</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>2</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
 	<key>NSHighResolutionCapable</key>
@@ -42,6 +42,73 @@
 				<string>public.bzip2-archive</string>
 				<string>org.tukaani.xz-archive</string>
 				<string>com.rarlab.rar-archive</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Archive and package containers</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>apk</string>
+				<string>apks</string>
+				<string>xapk</string>
+				<string>aab</string>
+				<string>ipa</string>
+				<string>jar</string>
+				<string>war</string>
+				<string>ear</string>
+				<string>aar</string>
+				<string>epub</string>
+				<string>cbz</string>
+				<string>cbr</string>
+				<string>cb7</string>
+				<string>cbt</string>
+				<string>xpi</string>
+				<string>vsix</string>
+				<string>nupkg</string>
+				<string>whl</string>
+				<string>egg</string>
+				<string>docx</string>
+				<string>docm</string>
+				<string>xlsx</string>
+				<string>xlsm</string>
+				<string>pptx</string>
+				<string>pptm</string>
+				<string>odt</string>
+				<string>ods</string>
+				<string>odp</string>
+				<string>pages</string>
+				<string>numbers</string>
+				<string>key</string>
+				<string>appx</string>
+				<string>appxbundle</string>
+				<string>msix</string>
+				<string>msixbundle</string>
+				<string>zipx</string>
+				<string>zst</string>
+				<string>tzst</string>
+				<string>iso</string>
+				<string>dmg</string>
+				<string>wim</string>
+				<string>esd</string>
+				<string>cab</string>
+				<string>deb</string>
+				<string>rpm</string>
+				<string>pkg</string>
+				<string>xar</string>
+				<string>xip</string>
+				<string>ova</string>
+				<string>img</string>
+				<string>vhd</string>
+				<string>vhdx</string>
+				<string>vdi</string>
+				<string>vmdk</string>
+				<string>qcow2</string>
+				<string>squashfs</string>
 			</array>
 		</dict>
 	</array>

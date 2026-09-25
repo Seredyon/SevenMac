@@ -21,6 +21,11 @@ struct AddArchiveSheet: View {
         !splitEnabled || ArchiveService.isValidVolumeSize(options.volumeSize)
     }
 
+    private var singleFileOnly: Bool { [.gzip, .bzip2, .xz].contains(options.format) }
+    private var validInput: Bool {
+        !singleFileOnly || (inputs.count == 1 && (try? inputs[0].resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SheetHeader(title: "Add to Archive",
@@ -50,6 +55,10 @@ struct AddArchiveSheet: View {
                         ForEach(ArchiveFormat.allCases) { format in
                             Text(format.displayName).tag(format)
                         }
+                    }
+                    if !validInput {
+                        Text("This format compresses one file. Choose ZIP, 7z or TAR for folders or multiple files.")
+                            .font(.caption).foregroundStyle(.orange)
                     }
                     Picker("Level", selection: $options.level) {
                         ForEach(CompressionLevel.allCases) { level in
@@ -107,7 +116,7 @@ struct AddArchiveSheet: View {
             .formStyle(.grouped)
 
             SheetFooter(confirmTitle: "Compress",
-                        confirmDisabled: !passwordsMatch || !volumeSizeOK,
+                        confirmDisabled: !passwordsMatch || !volumeSizeOK || !validInput,
                         onCancel: { dismiss() },
                         onConfirm: {
                             if !splitEnabled { options.volumeSize = "" }
@@ -122,6 +131,7 @@ struct AddArchiveSheet: View {
             archiveURL = ArchiveService.suggestedArchiveURL(for: inputs, format: options.format)
         }
         .onChange(of: options.format) { newFormat in
+            if !newFormat.supportsEncryption { options.password = ""; confirmPassword = "" }
             archiveURL = archiveURL
                 .deletingPathExtension()
                 .appendingPathExtension(newFormat.fileExtension)

@@ -13,7 +13,12 @@ struct SevenMacApp: App {
                 .environmentObject(browser)
                 .environmentObject(job)
                 .frame(minWidth: 940, minHeight: 580)
-                .onAppear { SevenZRunner.shared.binaryPath = settings.customBinaryPath }
+                .onAppear {
+                    SevenZRunner.shared.binaryPath = settings.customBinaryPath
+                    browser.showHiddenFiles = settings.showHiddenFiles
+                    browser.reload()
+                }
+                .onOpenURL { browser.open($0) }
         }
         .commands { AppCommands() }
 
@@ -25,7 +30,7 @@ struct SevenMacApp: App {
 }
 
 enum AppAction: String {
-    case open, add, extractHere, extractTo, test, refresh, up, benchmark, hash, info, delete, rename
+    case edit, open, add, extractHere, extractTo, test, refresh, up, benchmark, hash, info, delete, rename
 
     var notification: Notification.Name { Notification.Name("SevenMac." + rawValue) }
 
@@ -51,6 +56,8 @@ struct AppCommands: Commands {
                 .keyboardShortcut("e", modifiers: .command)
             Button("Extract To\u{2026}") { AppAction.extractTo.post() }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
+            Button("Edit Selected File…") { AppAction.edit.post() }
+                .keyboardShortcut("j", modifiers: .command)
             Divider()
             Button("Test Integrity") { AppAction.test.post() }
                 .keyboardShortcut("t", modifiers: [.command, .shift])

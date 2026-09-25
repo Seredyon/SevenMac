@@ -73,6 +73,9 @@ final class BrowserModel: ObservableObject {
     @Published var needsPassword = false
     @Published var searchText = ""
 
+    private var loadGeneration = UUID()
+    @Published var searchAllEntries = true
+    @Published var recentArchives: [URL] = (UserDefaults.standard.stringArray(forKey: "recentArchives") ?? []).map { URL(fileURLWithPath: $0) }
     private var archiveEntries: [ArchiveEntry] = []
     private(set) var archivePassword: String = ""
     private var backStack: [Location] = []
@@ -87,6 +90,14 @@ final class BrowserModel: ObservableObject {
 
     var filteredItems: [Item] {
         guard !searchText.isEmpty else { return items }
+        if location.isArchive && searchAllEntries {
+            return archiveEntries.filter { !$0.isDirectory && $0.path.localizedCaseInsensitiveContains(searchText) }.map {
+                Item(name: $0.path, path: $0.path, isDirectory: false,
+                     isArchive: ArchiveService.isArchive(URL(fileURLWithPath: $0.path)),
+                     size: $0.size, packedSize: $0.packedSize, modified: $0.modified,
+                     attributes: $0.attributes, crc: $0.crc, encrypted: $0.encrypted)
+            }
+        }
         return items.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
     }
 
@@ -110,6 +121,10 @@ final class BrowserModel: ObservableObject {
             backStack.append(location)
             forwardStack.removeAll()
         }
+        if currentArchiveURL != { if case let .archive(url, _) = newLocation { return url }; return nil }() {
+            archivePassword = ""
+        }
+        searchText = ""
         location = newLocation
         reload()
     }
@@ -117,6 +132,8 @@ final class BrowserModel: ObservableObject {
     func goBack() {
         guard let previous = backStack.popLast() else { return }
         forwardStack.append(location)
+        archivePassword = ""
+        searchText = ""
         location = previous
         reload()
     }
@@ -124,6 +141,8 @@ final class BrowserModel: ObservableObject {
     func goForward() {
         guard let next = forwardStack.popLast() else { return }
         backStack.append(location)
+        archivePassword = ""
+        searchText = ""
         location = next
         reload()
     }
@@ -151,7 +170,7 @@ final class BrowserModel: ObservableObject {
         open(URL(fileURLWithPath: expanded))
     }
 
-    func open(_ url: URL) {
+    func open(_ url: URL, asArchive: Bool = false) {
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else {
             errorMessage = "Path not found: \(url.path)"
@@ -160,10 +179,15 @@ final class BrowserModel: ObservableObject {
         errorMessage = nil
         if isDir.boolValue {
             go(to: .folder(url))
-        } else if ArchiveService.isArchive(url) {
+        } else if asArchive || ArchiveService.isArchive(url) {
             archivePassword = ""
             // For split archives always open through the first volume.
-            go(to: .archive(archive: ArchiveService.primaryVolume(url), inner: ""))
+            let primary = ArchiveService.primaryVolume(url)
+            recentArchives.removeAll { $0 == primary }
+            recentArchives.insert(primary, at: 0)
+            recentArchives = Array(recentArchives.prefix(8))
+            UserDefaults.standard.set(recentArchives.map(\.path), forKey: "recentArchives")
+            go(to: .archive(archive: primary, inner: ""))
         } else {
             NSWorkspace.shared.open(url)
         }
@@ -181,6 +205,7 @@ final class BrowserModel: ObservableObject {
     }
 
     func reload() {
+        needsPassword = false
         switch location {
         case let .folder(url):
             loadFolder(url)
@@ -198,6 +223,10 @@ final class BrowserModel: ObservableObject {
     // MARK: - Loading
 
     private func loadFolder(_ url: URL) {
+        let generation = UUID()
+        loadGeneration = generation
+        items = []
+        archiveEntries = []
         isLoading = true
         errorMessage = nil
         summary = nil
@@ -208,9 +237,17 @@ final class BrowserModel: ObservableObject {
             var options: FileManager.DirectoryEnumerationOptions = []
             if !includeHidden { options.insert(.skipsHiddenFiles) }
             let keys: [URLResourceKey] = [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey]
-            let contents = (try? fm.contentsOfDirectory(at: url,
-                                                        includingPropertiesForKeys: keys,
-                                                        options: options)) ?? []
+            let contents: [URL]
+            do {
+                contents = try fm.contentsOfDirectory(at: url, includingPropertiesForKeys: keys, options: options)
+            } catch {
+                DispatchQueue.main.async {
+                    guard self.loadGeneration == generation else { return }
+                    self.isLoading = false
+                    self.errorMessage = error.localizedDescription
+                }
+                return
+            }
             let mapped: [Item] = contents.map { child in
                 let values = try? child.resourceValues(forKeys: Set(keys))
                 let isDir = values?.isDirectory ?? false
@@ -230,6 +267,7 @@ final class BrowserModel: ObservableObject {
             }
 
             DispatchQueue.main.async {
+                guard self.loadGeneration == generation else { return }
                 self.items = mapped
                 self.archiveEntries = []
                 self.isLoading = false
@@ -238,13 +276,19 @@ final class BrowserModel: ObservableObject {
     }
 
     private func loadArchive(_ archive: URL, inner: String, password: String) {
+        let generation = UUID()
+        loadGeneration = generation
+        items = []
+        archiveEntries = []
         isLoading = true
         errorMessage = nil
 
+        summary = nil
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 let listing = try ArchiveService.list(archive: archive, password: password)
                 DispatchQueue.main.async {
+                    guard self.loadGeneration == generation else { return }
                     self.archiveEntries = listing.entries
                     self.summary = listing.summary
                     self.items = Self.items(from: listing.entries, inner: inner)
@@ -252,11 +296,13 @@ final class BrowserModel: ObservableObject {
                 }
             } catch SevenZError.needsPassword {
                 DispatchQueue.main.async {
+                    guard self.loadGeneration == generation else { return }
                     self.isLoading = false
                     self.needsPassword = true
                 }
             } catch {
                 DispatchQueue.main.async {
+                    guard self.loadGeneration == generation else { return }
                     self.isLoading = false
                     self.errorMessage = error.localizedDescription
                     self.items = []
@@ -277,6 +323,7 @@ final class BrowserModel: ObservableObject {
             guard !remainder.isEmpty else { continue }
             let parts = remainder.split(separator: "/").map(String.init)
 
+            guard !parts.isEmpty else { continue }
             if parts.count == 1 {
                 let item = Item(
                     name: parts[0],
@@ -291,7 +338,10 @@ final class BrowserModel: ObservableObject {
                     encrypted: entry.encrypted
                 )
                 if entry.isDirectory {
-                    folders[parts[0]] = item
+                    var directory = item
+                    directory.size += folders[parts[0]]?.size ?? 0
+                    directory.packedSize += folders[parts[0]]?.packedSize ?? 0
+                    folders[parts[0]] = directory
                 } else {
                     files.append(item)
                 }

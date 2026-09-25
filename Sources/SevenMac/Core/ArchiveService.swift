@@ -23,7 +23,9 @@ enum ArchiveFormat: String, CaseIterable, Identifiable {
         }
     }
 
-    var fileExtension: String { rawValue }
+    var fileExtension: String {
+        switch self { case .gzip: return "gz"; case .bzip2: return "bz2"; default: return rawValue }
+    }
 
     var supportsEncryption: Bool { self == .sevenZip || self == .zip }
     var supportsHeaderEncryption: Bool { self == .sevenZip }
@@ -110,11 +112,33 @@ enum HashAlgorithm: String, CaseIterable, Identifiable {
 /// Builds and executes 7zz command lines.
 enum ArchiveService {
 
-    static let archiveExtensions: Set<String> = [
-        "7z", "zip", "zipx", "rar", "tar", "gz", "tgz", "bz2", "tbz", "tbz2", "xz", "txz",
-        "lzma", "lz4", "zst", "cab", "iso", "dmg", "wim", "msi", "exe", "apk", "ipa",
-        "jar", "war", "epub", "cpio", "rpm", "deb", "arj", "lzh", "chm", "vhd", "xar", "pkg"
-    ]
+    // Containers understood by the bundled 7zz, plus ZIP-based package formats.
+    static let archiveExtensions: Set<String> = Set("""
+        7z zip zipx rar tar gz gzip tgz tpz bz2 bzip2 tbz tbz2 xz txz
+        lzma lzma86 zst tzst z taz cab iso dmg wim swm esd ppkg msi msp msm
+        exe apk apks xapk aab ipa jar war ear aar jmod epub cbz cbr cb7 cbt
+        xpi vsix nupkg whl egg docx docm xlsx xlsm pptx pptm odt ods odp
+        ott ots otp odg pages numbers key appx appxbundle msix msixbundle
+        cpio rpm deb udeb ar a arj lzh lha chm chi chq chw vhd vhdx avhdx
+        vdi vmdk qcow qcow2 qcow2c xar pkg xip ova img apfs hfs hfsx
+        ext ext2 ext3 ext4 fat ntfs squashfs cramfs udf simg lpimg
+        """.split(whereSeparator: \.isWhitespace).map(String.init))
+
+    static func canModify(_ archive: URL, type: String) -> Bool {
+        ["zip", "7z", "tar"].contains(type.lowercased())
+            && !isVolumeSuffix(archive.pathExtension)
+            && archive.pathExtension.lowercased().range(of: "^(r|z)[0-9]{2}$", options: .regularExpression) == nil
+    }
+
+    static func modificationNotice(_ archive: URL) -> String? {
+        switch archive.pathExtension.lowercased() {
+        case "apk", "apks", "xapk", "aab", "ipa", "jar", "appx", "msix", "appxbundle", "msixbundle", "xpi":
+            return "Changing this package invalidates its signature. Sign it again with the platform tools before installing or distributing it. Android binary XML, resources and DEX require dedicated tools; they can be replaced here."
+        case "epub", "docx", "xlsx", "pptx", "odt", "ods", "odp", "pages", "numbers", "key":
+            return "Keep the document’s internal structure intact. Archive integrity does not guarantee that the document will open in its original app."
+        default: return nil
+        }
+    }
 
     static func isArchive(_ url: URL) -> Bool {
         let ext = url.pathExtension.lowercased()
@@ -139,10 +163,19 @@ enum ArchiveService {
     /// Maps any volume of a split archive to its first volume - the one 7zz
     /// must be pointed at for list, extract and test operations.
     static func primaryVolume(_ url: URL) -> URL {
-        let ext = url.pathExtension
-        guard isVolumeSuffix(ext.lowercased()), Int(ext) != 1 else { return url }
-        let first = url.deletingPathExtension()
-            .appendingPathExtension(String(format: "%0\(ext.count)d", 1))
+        let ext = url.pathExtension.lowercased()
+        var first = url
+        if isVolumeSuffix(ext), Int(ext) != 1 {
+            first = url.deletingPathExtension().appendingPathExtension(String(format: "%0\(ext.count)d", 1))
+        } else if ext.range(of: "^r[0-9]{2}$", options: .regularExpression) != nil {
+            first = url.deletingPathExtension().appendingPathExtension("rar")
+        } else if ext.range(of: "^z[0-9]{2}$", options: .regularExpression) != nil {
+            first = url.deletingPathExtension().appendingPathExtension("zip")
+        } else if let range = url.lastPathComponent.range(of: "(?i)\\.part[0-9]+\\.rar$", options: .regularExpression) {
+            let suffix = String(url.lastPathComponent[range]).dropFirst(5).dropLast(4)
+            let name = String(url.lastPathComponent[..<range.lowerBound]) + ".part" + String(format: "%0\(suffix.count)d", 1) + ".rar"
+            first = url.deletingLastPathComponent().appendingPathComponent(name)
+        }
         return FileManager.default.fileExists(atPath: first.path) ? first : url
     }
 
@@ -161,10 +194,11 @@ enum ArchiveService {
     /// Validates split-volume sizes such as `100m`, `4g`, `700k`, `65536b`.
     static func isValidVolumeSize(_ value: String) -> Bool {
         value.range(of: "^[0-9]+[bkmgBKMG]?$", options: .regularExpression) != nil
+            && (UInt64(value.prefix(while: { $0.isNumber })) ?? 0) > 0
     }
 
     static func addArguments(archive: URL, inputPaths: [String], options: AddOptions) -> [String] {
-        var args = ["a", "-t" + options.format.rawValue, "-mx=\(options.level.rawValue)"]
+        var args = ["a", "-spd", "-t" + options.format.rawValue, "-mx=\(options.level.rawValue)"]
 
         if options.threads > 0 { args.append("-mmt=\(options.threads)") }
         if options.format.supportsSolid {
@@ -178,8 +212,10 @@ enum ArchiveService {
         }
         if options.deleteSourceAfter { args.append("-sdel") }
 
+        if options.format == .zip, !options.password.isEmpty { args.append("-mem=AES256") }
+        args.append("--")
         args.append(archive.path)
-        args.append(contentsOf: inputPaths)
+        args.append(contentsOf: inputPaths.map { $0.hasPrefix("/") ? $0 : "./" + $0 })
         return args
     }
 
@@ -188,10 +224,10 @@ enum ArchiveService {
         args.append("-o" + options.destination.path)
         args.append(options.overwrite.switchValue)
         args.append("-sccUTF-8")
+        args.append("-spd")
+        args.append(contentsOf: options.selectedPaths.map { "-i!" + $0 })
+        args.append("--")
         args.append(archive.path)
-        for path in options.selectedPaths {
-            args.append(path)
-        }
         return args
     }
 
@@ -200,11 +236,11 @@ enum ArchiveService {
     }
 
     static func deleteArguments(archive: URL, paths: [String]) -> [String] {
-        ["d", archive.path] + paths
+        ["d", "-spd", "--", archive.path] + paths
     }
 
     static func renameArguments(archive: URL, from: String, to: String) -> [String] {
-        ["rn", archive.path, from, to]
+        ["rn", "-spd", "--", archive.path, from, to]
     }
 
     static func hashArguments(paths: [URL], algorithm: HashAlgorithm) -> [String] {

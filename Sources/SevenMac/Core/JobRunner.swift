@@ -35,6 +35,7 @@ final class JobRunner: ObservableObject {
         self.detail = "Starting\u{2026}"
         self.fraction = 0
         self.indeterminate = true
+        self.lastLog = ""
         self.isRunning = true
         self.cancelRequested = false
 
@@ -47,7 +48,10 @@ final class JobRunner: ObservableObject {
                     workingDirectory: workingDirectory,
                     wantsProgress: true,
                     onProcess: { proc in
-                        DispatchQueue.main.async { self.process = proc }
+                        DispatchQueue.main.async {
+                            self.process = proc
+                            if self.cancelRequested { proc.terminate() }
+                        }
                     },
                     onProgress: { value, text in
                         DispatchQueue.main.async {

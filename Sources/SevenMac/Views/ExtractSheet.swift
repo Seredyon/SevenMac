@@ -47,10 +47,8 @@ struct ExtractSheet: View {
                     }
                 }
 
-                if requiresPassword {
-                    Section("Encryption") {
-                        SecureField("Password", text: $password)
-                    }
+                Section(requiresPassword ? "Encryption" : "Password (if needed)") {
+                    SecureField("Password", text: $password)
                 }
             }
             .formStyle(.grouped)
